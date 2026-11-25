@@ -31,6 +31,57 @@ c:\CAPSTONE\.venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000 
 
 Buka browser ke: `http://127.0.0.1:8000`
 
+### 🚀 Panduan Instalasi & Menjalankan Proyek di Lokal
+
+Clone Repository
+Buka terminal (atau VS Code Terminal), lalu jalankan perintah berikut:
+
+```powershell
+git clone https://github.com/clarissya/capstone-bmkg.git
+cd capstone-bmkg
+```
+
+(Ganti username dengan username pemilik repository GitHub).
+
+Buat dan Aktifkan Virtual Environment
+Disarankan menggunakan virtual environment agar library tidak bentrok dengan proyek lain:
+
+```powershell
+# Membuat virtual environment
+python -m venv venv
+
+# Mengaktifkan di Windows:
+venv\Scripts\activate
+
+# Mengaktifkan di macOS / Linux:
+source venv/bin/activate
+```
+
+Install Dependensi
+Instal semua library yang dibutuhkan menggunakan file requirements.txt:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Konfigurasi Database PostgreSQL
+Buka PostgreSQL / pgAdmin dan buat database baru bernama:
+
+```powershell
+CREATE DATABASE bmkg_qc;
+```
+
+Sesuaikan kredensial koneksi database (host, port, user, password) pada file database.py (atau file .env jika digunakan).
+
+Jalankan Aplikasi Web
+
+```powershell
+streamlit run app.py
+```
+
+Setelah perintah dijalankan, browser akan otomatis membuka aplikasi pada alamat:
+👉 http://localhost:8501
+
 ### Menggunakan PostgreSQL (Opsional)
 
 Secara default aplikasi menggunakan SQLite (`bmkg_qc.db`) agar langsung berjalan tanpa konfigurasi tambahan. Untuk menyambungkan ke PostgreSQL:
