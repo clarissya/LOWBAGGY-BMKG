@@ -1,0 +1,7 @@
+DATETIME_UTC,STATION_NAME,T2M,RH2M,PRECIP,WS10M,SLP
+2026-11-25T06:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,30.2,78.0,0.0,5.1,1009.8
+2026-11-25T07:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,30.8,76.5,0.0,31.0,1009.5
+2026-11-25T08:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,62.5,74.0,0.0,6.2,ERR
+2026-11-25T09:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,31.4,14.0,0.0,,1009.2
+2026-11-25T10:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,31.2,75.5,1.5,5.8,1009.0
+2026-11-25T11:00:00Z,Stasiun Meteorologi Maritim Tanjung Priok,30.9,77.0,0.0,5.5,1009.1

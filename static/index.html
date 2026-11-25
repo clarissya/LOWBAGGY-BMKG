@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Platform Monitoring Kualitas Data &amp; Tata Kelola Observasi BMKG</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <!-- LOGIN OVERLAY -->
+  <div id="login-view" class="login-shell">
+    <div class="login-container">
+      <div class="login-hero">
+        <div class="hero-glow"></div>
+        <div class="hero-top">
+          <div class="bmkg-emblem">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/><path d="m4.9 4.9 2.9 2.9"/><circle cx="12" cy="12" r="4"/></svg>
+          </div>
+          <span class="hero-tag">BMKG OBSERVATION GOVERNANCE</span>
+        </div>
+        <h1>Platform Monitoring Kualitas Data &amp; Tata Kelola Observasi</h1>
+        <p class="hero-desc">
+          Sistem satu pintu untuk standardisasi data AWS lintas stasiun, deteksi anomali otomatis berstandar <strong>WMO-No. 8</strong>, penugasan <strong>RACI &amp; SOP</strong>, serta rekam jejak audit permanen.
+        </p>
+        <div class="hero-features">
+          <div class="hero-feat">
+            <span class="feat-dot"></span>
+            <div><strong>ETL &amp; QC Otomatis</strong><span>Range, Step, Persistence &amp; Missing Check</span></div>
+          </div>
+          <div class="hero-feat">
+            <span class="feat-dot"></span>
+            <div><strong>Matriks RACI &amp; Eskalasi SLA</strong><span>Penunjukan PIC &amp; panduan SOP instan</span></div>
+          </div>
+          <div class="hero-feat">
+            <span class="feat-dot"></span>
+            <div><strong>Audit Trail Immutable</strong><span>Jejak perubahan status permanen &amp; terstruktur</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="login-card">
+        <div class="login-card-head">
+          <h2>Masuk ke Dashboard</h2>
+          <p>Gunakan akun unit kerja BMKG atau pilih akun demo di bawah.</p>
+        </div>
+
+        <form id="login-form" class="login-form">
+          <div class="form-group">
+            <label for="login-username">Username</label>
+            <input id="login-username" type="text" placeholder="contoh: qc.datin" required />
+          </div>
+          <div class="form-group">
+            <label for="login-password">Password</label>
+            <input id="login-password" type="password" placeholder="••••••••" required />
+          </div>
+          <div id="login-error" class="alert alert-error hidden"></div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Masuk ke Platform</button>
+        </form>
+
+        <div class="demo-accounts">
+          <div class="demo-title">Akses Cepat Akun Demo (Password: <code>bmkg123</code>)</div>
+          <div class="demo-grid">
+            <button type="button" class="demo-btn" data-user="qc.datin" data-pass="bmkg123">
+              <strong>Staf QC / Datin</strong>
+              <span>qc.datin · Pengolahan Data</span>
+            </button>
+            <button type="button" class="demo-btn" data-user="teknisi.obs" data-pass="bmkg123">
+              <strong>Teknisi / Observasi</strong>
+              <span>teknisi.obs · Kemayoran &amp; Priok</span>
+            </button>
+            <button type="button" class="demo-btn" data-user="teknisi.bogor" data-pass="bmkg123">
+              <strong>Teknisi Staklim Bogor</strong>
+              <span>teknisi.bogor · Stasiun Bogor</span>
+            </button>
+            <button type="button" class="demo-btn" data-user="manajemen" data-pass="bmkg123">
+              <strong>Manajemen</strong>
+              <span>manajemen · Ringkasan &amp; SLA</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APPLICATION SHELL -->
+  <div id="app-view" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="bmkg-emblem sm">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3"/><path d="M12 19v3"/><path d="m4.9 4.9 2.1 2.1"/><path d="m17 17 2.1 2.1"/><path d="M2 12h3"/><path d="M19 12h3"/><path d="m4.9 19.1 2.1-2.1"/><path d="m17 7 2.1-2.1"/></svg>
+        </div>
+        <div>
+          <div class="brand-title">BMKG DataGov</div>
+          <div class="brand-sub">WMO-No. 8 Quality Suite</div>
+        </div>
+      </div>
+
+      <div class="nav-section-label">MENU UTAMA</div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-page="dashboard">
+          <span class="nav-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          </span>
+          <span>Beranda &amp; Ringkasan</span>
+        </button>
+        <button class="nav-item" data-page="etl">
+          <span class="nav-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+          </span>
+          <span>Import &amp; Mesin QC</span>
+        </button>
+        <button class="nav-item" data-page="anomalies">
+          <span class="nav-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          </span>
+          <span>Monitoring Anomali</span>
+          <span id="nav-open-badge" class="badge badge-danger hidden">0</span>
+        </button>
+        <button class="nav-item" data-page="governance">
+          <span class="nav-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+          </span>
+          <span>Tata Kelola &amp; Audit</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-card">
+          <div class="user-role-pill" id="sidebar-role-pill">ROLE</div>
+          <div class="user-name" id="sidebar-user-name">-</div>
+          <div class="user-unit" id="sidebar-user-unit">-</div>
+        </div>
+        <button id="logout-btn" class="btn btn-ghost-light btn-sm btn-block">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
+          Keluar Sesi
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <h2 id="page-title">Beranda (Dashboard Ringkasan Kualitas Data)</h2>
+          <p id="page-subtitle" class="muted">Pemantauan kesehatan data observasi AWS lintas stasiun</p>
+        </div>
+        <div class="topbar-actions">
+          <div id="role-notif-pill" class="notif-pill hidden" title="Klik untuk melihat kasus ditugaskan">
+            <span class="pulse-dot warn"></span>
+            <span id="role-notif-text">0 tugas aktif</span>
+          </div>
+          <span class="db-pill"><span class="pulse-dot blue"></span>Standar: WMO-No. 8</span>
+        </div>
+      </header>
+
+      <div class="content-body">
+        <div id="toast-container" class="toast-container"></div>
+
+        <!-- PAGE 1: DASHBOARD -->
+        <section id="page-dashboard" class="page-section">
+          <div class="card filter-card">
+            <div class="filter-row">
+              <div class="form-group">
+                <label for="dash-start">Dari Tanggal</label>
+                <input id="dash-start" type="date" />
+              </div>
+              <div class="form-group">
+                <label for="dash-end">Sampai Tanggal</label>
+                <input id="dash-end" type="date" />
+              </div>
+              <div class="form-group">
+                <label for="dash-station">Stasiun AWS</label>
+                <select id="dash-station"><option value="ALL">Semua Stasiun</option></select>
+              </div>
+              <div class="form-group">
+                <label for="dash-param">Parameter Cuaca</label>
+                <select id="dash-param"><option value="ALL">Semua Parameter</option></select>
+              </div>
+              <div class="filter-btns">
+                <button id="dash-apply-btn" class="btn btn-primary">Terapkan Filter</button>
+                <button id="dash-reset-btn" class="btn btn-outline">Reset</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="kpi-grid">
+            <div class="kpi-card kpi-accent-sky">
+              <div class="kpi-top">
+                <div class="kpi-label">Kelengkapan Data (Completeness)</div>
+                <div class="kpi-icon sky">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                </div>
+              </div>
+              <div class="kpi-value" id="kpi-completeness">0%</div>
+              <div class="progress-track"><div id="bar-completeness" class="progress-fill bg-sky"></div></div>
+              <div class="kpi-sub" id="kpi-total-obs">0 baris observasi</div>
+            </div>
+            <div class="kpi-card kpi-accent-blue">
+              <div class="kpi-top">
+                <div class="kpi-label">Validasi Skema (Validity)</div>
+                <div class="kpi-icon blue">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+                </div>
+              </div>
+              <div class="kpi-value" id="kpi-validity">0%</div>
+              <div class="progress-track"><div id="bar-validity" class="progress-fill bg-blue"></div></div>
+              <div class="kpi-sub" id="kpi-valid-qc">0% lulus seluruh aturan QC</div>
+            </div>
+            <div class="kpi-card kpi-accent-amber">
+              <div class="kpi-top">
+                <div class="kpi-label">Total Anomali Terdeteksi</div>
+                <div class="kpi-icon amber">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+                </div>
+              </div>
+              <div class="kpi-value text-warning" id="kpi-anomalies">0</div>
+              <div class="kpi-sub">Flag Warning/Suspect &amp; Critical/Missing</div>
+            </div>
+            <div class="kpi-card kpi-accent-rose">
+              <div class="kpi-top">
+                <div class="kpi-label">Kasus Belum Tertangani</div>
+                <div class="kpi-icon rose">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+                </div>
+              </div>
+              <div class="kpi-value text-danger" id="kpi-unhandled">0</div>
+              <div class="kpi-sub" id="kpi-escalated-sub">0 kasus eskalasi / lewat SLA</div>
+            </div>
+            <div class="kpi-card kpi-accent-emerald">
+              <div class="kpi-top">
+                <div class="kpi-label">Kepatuhan SOP &amp; SLA</div>
+                <div class="kpi-icon emerald">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                </div>
+              </div>
+              <div class="kpi-value text-success" id="kpi-compliance">100%</div>
+              <div class="kpi-sub" id="kpi-resolved-sub">0 kasus selesai / terverifikasi</div>
+            </div>
+          </div>
+
+          <div class="charts-grid">
+            <div class="card">
+              <div class="card-header">
+                <h3>Proporsi Data Valid vs Anomali / Hilang</h3>
+                <div class="segmented-control">
+                  <button id="chart-mode-station" class="seg-btn active">Per Stasiun</button>
+                  <button id="chart-mode-param" class="seg-btn">Per Parameter</button>
+                </div>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="chart-quality-bar"></canvas>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <h3>Distribusi Pelanggaran QC (WMO-No. 8)</h3>
+              </div>
+              <div class="chart-wrap">
+                <canvas id="chart-violation-pie"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3>Ringkasan Kualitas &amp; Kepatuhan Penyelesaian per Stasiun</h3>
+                <span class="muted small">Rekapitulasi operasional untuk Manajemen &amp; Unit Pengolahan Data</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Kode</th>
+                    <th>Nama Stasiun</th>
+                    <th>Total Data</th>
+                    <th>Completeness</th>
+                    <th>Valid</th>
+                    <th>Warning</th>
+                    <th>Critical / Missing</th>
+                    <th>Kasus Aktif</th>
+                    <th>Kasus Selesai</th>
+                    <th>Eskalasi / Overdue</th>
+                  </tr>
+                </thead>
+                <tbody id="dash-station-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE 2: IMPORT & ETL -->
+        <section id="page-etl" class="page-section hidden">
+          <div id="etl-readonly-banner" class="alert alert-info hidden">
+            Anda masuk sebagai <strong id="etl-role-label"></strong>. Pengunggahan data mentah dan eksekusi mesin ETL hanya tersedia untuk <strong>Staf QC / Datin</strong>. Anda tetap dapat melihat riwayat batch ETL di bawah.
+          </div>
+
+          <div id="etl-upload-panel" class="grid-2">
+            <div class="card">
+              <div class="card-header">
+                <h3>Unggah File Observasi Mentah (CSV / Excel)</h3>
+                <span class="badge badge-blue">Auto-Standardize + WMO-No. 8</span>
+              </div>
+              <p class="muted mb-12">
+                Unggah 1 atau beberapa file CSV/Excel dari berbagai stasiun AWS meski memiliki nama kolom, delimiter (<code>,</code> atau <code>;</code>), format tanggal, atau satuan yang berbeda (misal: <code>knot</code> ke <code>m/s</code>).
+              </p>
+              <form id="etl-upload-form">
+                <div class="dropzone" id="etl-dropzone">
+                  <input id="etl-file-input" type="file" accept=".csv,.xlsx,.xls" multiple />
+                  <div class="dropzone-icon">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+                  </div>
+                  <div class="dropzone-text">Pilih atau seret file CSV / Excel ke area ini</div>
+                  <div id="etl-selected-files" class="muted small mt-6">Belum ada file dipilih</div>
+                </div>
+                <div class="btn-row mt-12">
+                  <button type="submit" class="btn btn-primary">Jalankan ETL &amp; Mesin QC</button>
+                  <button type="button" id="etl-demo-sample-btn" class="btn btn-sky">
+                    Demo: Unggah 3 Sampel Stasiun AWS
+                  </button>
+                  <button type="button" id="etl-reset-demo-btn" class="btn btn-outline">
+                    Reset ke Baseline
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>Sampel File Mentah Lintas Stasiun</h3>
+                <span class="muted small">Unduh untuk inspeksi skema</span>
+              </div>
+              <ul id="sample-files-list" class="sample-list"></ul>
+              <div class="qc-rules-summary">
+                <h4>Aturan Mesin QC Otomatis (WMO-No. 8):</h4>
+                <ul>
+                  <li><strong>Missing Data &amp; Schema:</strong> Deteksi nilai kosong, <code>NULL</code>, <code>-999</code>, <code>ERR</code>, atau korup.</li>
+                  <li><strong>Range Check:</strong> Validasi batas wajar klimatologis (Warning) &amp; batas fisik (Critical).</li>
+                  <li><strong>Step Check:</strong> Deteksi lonjakan drastis antar jam (spike sensor).</li>
+                  <li><strong>Persistence Check:</strong> Deteksi sensor macet / nilai konstan berulang.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div id="etl-result-card" class="card hidden">
+            <div class="card-header">
+              <h3>Hasil Eksekusi ETL &amp; Auto-Flagging Terbaru</h3>
+            </div>
+            <div id="etl-result-body"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>Riwayat Batch ETL &amp; Validasi</h3>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Kode Batch</th>
+                    <th>Nama File</th>
+                    <th>Diunggah Oleh</th>
+                    <th>Waktu</th>
+                    <th>Stasiun Terdeteksi</th>
+                    <th>Total</th>
+                    <th>Valid</th>
+                    <th>Warning</th>
+                    <th>Critical/Missing</th>
+                  </tr>
+                </thead>
+                <tbody id="etl-batches-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE 3: ANOMALY MONITORING -->
+        <section id="page-anomalies" class="page-section hidden">
+          <div class="card filter-card">
+            <div class="filter-row">
+              <div class="form-group">
+                <label for="anom-station">Stasiun</label>
+                <select id="anom-station"><option value="ALL">Semua Stasiun</option></select>
+              </div>
+              <div class="form-group">
+                <label for="anom-param">Parameter</label>
+                <select id="anom-param"><option value="ALL">Semua Parameter</option></select>
+              </div>
+              <div class="form-group">
+                <label for="anom-severity">Tingkat Flag</label>
+                <select id="anom-severity">
+                  <option value="ALL">Semua Severity</option>
+                  <option value="Critical/Missing">Critical/Missing (Merah)</option>
+                  <option value="Warning/Suspect">Warning/Suspect (Kuning)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="anom-status">Status Kasus</label>
+                <select id="anom-status">
+                  <option value="ALL">Semua Status</option>
+                  <option value="Open">Open</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Resolved">Resolved</option>
+                  <option value="Verified">Verified</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="anom-search">Cari Kasus / PIC</label>
+                <input id="anom-search" type="text" placeholder="Kode kasus, stasiun, PIC..." />
+              </div>
+              <div class="filter-btns">
+                <label class="checkbox-inline">
+                  <input id="anom-mine-only" type="checkbox" />
+                  <span>Tugas Saya</span>
+                </label>
+                <button id="anom-filter-btn" class="btn btn-primary">Filter</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3>Daftar Anomali &amp; Antrian Tindak Lanjut</h3>
+                <span class="muted small">Klik baris mana saja untuk membuka detail RACI, panduan SOP &amp; form tindak lanjut</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Kode Kasus</th>
+                    <th>Waktu Observasi</th>
+                    <th>Stasiun</th>
+                    <th>Parameter</th>
+                    <th>Nilai Tercatat</th>
+                    <th>Severity</th>
+                    <th>Pelanggaran QC</th>
+                    <th>PIC (RACI)</th>
+                    <th>Status &amp; SLA</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="anomalies-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- PAGE 4: GOVERNANCE & AUDIT TRAIL -->
+        <section id="page-governance" class="page-section hidden">
+          <div class="subtabs">
+            <button class="subtab-btn active" data-subtab="audit">Audit Trail Terpusat (Immutable)</button>
+            <button class="subtab-btn" data-subtab="dictionary">Data Dictionary (WMO-No. 8)</button>
+            <button class="subtab-btn" data-subtab="raci">RACI Registry &amp; Panduan SOP</button>
+          </div>
+
+          <!-- Subtab 1: Audit Trail -->
+          <div id="subtab-audit" class="subtab-panel">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>Log Jejak Audit Sistem</h3>
+                  <span class="muted small">Rekam jejak kronologis append-only — tidak dapat diubah atau dihapus</span>
+                </div>
+                <span class="badge badge-blue">Immutable Audit Log</span>
+              </div>
+              <div class="filter-row mb-12">
+                <div class="form-group">
+                  <label for="audit-case-filter">Filter Kode Kasus</label>
+                  <input id="audit-case-filter" type="text" placeholder="contoh: ANM-" />
+                </div>
+                <div class="form-group">
+                  <label for="audit-action-filter">Jenis Aktivitas</label>
+                  <select id="audit-action-filter">
+                    <option value="ALL">Semua Aktivitas</option>
+                    <option value="DETECTED">DETECTED</option>
+                    <option value="STATUS_CHANGE">STATUS_CHANGE</option>
+                    <option value="VERIFIED">VERIFIED</option>
+                    <option value="ESCALATED">ESCALATED</option>
+                    <option value="ETL_IMPORT">ETL_IMPORT</option>
+                  </select>
+                </div>
+                <div class="filter-btns">
+                  <button id="audit-filter-btn" class="btn btn-primary">Terapkan</button>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Audit ID</th>
+                      <th>Waktu</th>
+                      <th>ID Kasus</th>
+                      <th>Aktivitas</th>
+                      <th>Aktor &amp; Peran</th>
+                      <th>Perubahan Status</th>
+                      <th>PIC Ditugaskan</th>
+                      <th>Catatan</th>
+                    </tr>
+                  </thead>
+                  <tbody id="audit-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Subtab 2: Data Dictionary -->
+          <div id="subtab-dictionary" class="subtab-panel hidden">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h3>Data Dictionary Parameter Cuaca Standar BMKG</h3>
+                  <span class="muted small">Standarisasi format metadata &amp; ambang batas validasi WMO-No. 8</span>
+                </div>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Kode</th>
+                      <th>Parameter</th>
+                      <th>Unit</th>
+                      <th>Alias Kolom Mentah</th>
+                      <th>Wajar (Warning)</th>
+                      <th>Fisik (Critical)</th>
+                      <th>Maks Step/Jam</th>
+                      <th>Persistence</th>
+                      <th>Referensi</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dd-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Subtab 3: RACI & SOP -->
+          <div id="subtab-raci" class="subtab-panel hidden">
+            <div class="card">
+              <div class="card-header">
+                <h3>Matriks Pembagian Peran Tata Kelola Data (RACI Registry)</h3>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Kode Stasiun</th>
+                      <th>Nama Stasiun</th>
+                      <th>R (Responsible)</th>
+                      <th>A (Accountable / Data Owner)</th>
+                      <th>C (Consulted / Data Steward)</th>
+                      <th>I (Informed)</th>
+                      <th>PIC Teknisi</th>
+                      <th>SLA (Crit / Warn)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="raci-tbody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>Katalog SOP Penanganan Anomali Observasi</h3>
+              </div>
+              <div id="sop-cards-grid" class="sop-grid"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- ANOMALY DETAIL & ESCALATION MODAL -->
+  <div id="case-modal" class="modal-backdrop hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div>
+          <div class="modal-kicker" id="modal-case-code">ANM-0000</div>
+          <h3 id="modal-case-title">Detail Anomali &amp; Tindak Lanjut</h3>
+        </div>
+        <button id="modal-close-btn" class="modal-close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="modal-grid">
+          <div class="panel">
+            <h4>1. Detail Error &amp; Observasi</h4>
+            <div class="kv-list" id="modal-error-details"></div>
+          </div>
+
+          <div class="panel">
+            <h4>2. Penanggung Jawab Otomatis (RACI)</h4>
+            <div class="raci-list" id="modal-raci-details"></div>
+          </div>
+        </div>
+
+        <div class="panel mt-12">
+          <h4 id="modal-sop-title">3. Panduan SOP Penanganan</h4>
+          <ol id="modal-sop-steps" class="sop-steps"></ol>
+        </div>
+
+        <div id="modal-action-panel" class="panel mt-12">
+          <h4>4. Update Status Penyelesaian &amp; Simulasi Eskalasi</h4>
+          <form id="modal-update-form">
+            <div class="form-row-2">
+              <div class="form-group">
+                <label for="modal-status-select">Status Kasus</label>
+                <select id="modal-status-select">
+                  <option value="Open">Open</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="Resolved">Resolved (Perbaikan Selesai)</option>
+                  <option value="Verified">Verified (Verifikasi Staf QC)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Batas Waktu SLA</label>
+                <div id="modal-sla-info" class="sla-box">-</div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="modal-notes-input">Catatan Tindakan / Perbaikan</label>
+              <textarea id="modal-notes-input" rows="3" placeholder="Jelaskan tindakan kalibrasi, backfill data, atau perbaikan sensor yang dilakukan..." required></textarea>
+            </div>
+            <div class="modal-action-btns">
+              <button type="submit" id="modal-save-btn" class="btn btn-primary">Simpan Perubahan Status</button>
+              <button type="button" id="modal-escalate-btn" class="btn btn-danger">
+                Simulasi Eskalasi (Lewati SLA)
+              </button>
+            </div>
+          </form>
+          <div id="modal-readonly-note" class="alert alert-info hidden mt-12">
+            Peran <strong>Manajemen</strong> bersifat pantauan (read-only) dan tidak mengubah status teknis kasus.
+          </div>
+        </div>
+
+        <div class="panel mt-12">
+          <h4>5. Riwayat Jejak Audit Kasus Ini</h4>
+          <div id="modal-history-list" class="history-timeline"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
