@@ -23,125 +23,147 @@ def _auth_header(client: TestClient, username: str, password: str = "bmkg123") -
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_end_to_end_bmkg_workflow(client: TestClient):
-    # Reset demo baseline first as Staf QC
-    qc_headers = _auth_header(client, "qc.datin")
-    tek_headers = _auth_header(client, "teknisi.obs")
+def test_end_to_end_bmkg_interview_workflow(client: TestClient):
+    datin_headers = _auth_header(client, "datin.qc")
+    obs_headers = _auth_header(client, "observer.tprk")
+    fc_headers = _auth_header(client, "forecaster")
     mgr_headers = _auth_header(client, "manajemen")
 
-    r_reset = client.post("/api/etl/reset-demo", headers=qc_headers)
+    r_reset = client.post("/api/etl/reset-demo", headers=datin_headers)
     assert r_reset.status_code == 200
 
-    # Baseline dashboard snapshot
-    dash_before = client.get("/api/dashboard", headers=qc_headers).json()
-    assert dash_before["kpis"]["total_observations"] == 20
+    # Baseline 24h maritime dataset: 24h * 3 stations * 3 params = 216 observations
+    dash_before = client.get("/api/dashboard", headers=datin_headers).json()
+    assert dash_before["kpis"]["total_observations"] == 216
 
-    # RBAC checks: Teknisi & Manajemen cannot upload ETL
-    sample_a = (SAMPLE_DIR / "stasiun_kemayoran_format_a.csv").read_bytes()
-    r_forbidden = client.post(
-        "/api/etl/upload",
-        headers=tek_headers,
-        files={"files": ("stasiun_kemayoran_format_a.csv", sample_a, "text/csv")},
-    )
-    assert r_forbidden.status_code == 403
+    # Check 24h and 72h tendency endpoint for Forecaster
+    ts_24 = client.get("/api/dashboard/timeseries?station_code=AWS-TPRK&parameter_code=temperature&window_hours=24", headers=fc_headers)
+    assert ts_24.status_code == 200
+    assert ts_24.json()["unit"] == "°C"
+    assert len(ts_24.json()["points"]) == 24
 
-    # Step 1 & 2: Staf QC uploads 3 heterogeneous station CSV files
+    # RBAC checks: Observer, Forecaster & Manajemen cannot upload ETL
+    sample_a = (SAMPLE_DIR / "aws_tanjung_perak_10menit.csv").read_bytes()
+    for forbidden_hdr in (obs_headers, fc_headers, mgr_headers):
+        r_forb = client.post(
+            "/api/etl/upload",
+            headers=forbidden_hdr,
+            files={"files": ("aws_tanjung_perak_10menit.csv", sample_a, "text/csv")},
+        )
+        assert r_forb.status_code == 403
+
+    # Step 1 & 2: Datin uploads 3 heterogeneous station CSV files (10-minute + 1-hour, m/s -> knots)
     sample_files = [
-        ("files", ("stasiun_kemayoran_format_a.csv", (SAMPLE_DIR / "stasiun_kemayoran_format_a.csv").read_bytes(), "text/csv")),
-        ("files", ("stasiun_bogor_format_b.csv", (SAMPLE_DIR / "stasiun_bogor_format_b.csv").read_bytes(), "text/csv")),
-        ("files", ("stasiun_tanjung_priok_format_c.csv", (SAMPLE_DIR / "stasiun_tanjung_priok_format_c.csv").read_bytes(), "text/csv")),
+        ("files", ("aws_tanjung_perak_10menit.csv", (SAMPLE_DIR / "aws_tanjung_perak_10menit.csv").read_bytes(), "text/csv")),
+        ("files", ("aws_tuban_format_b.csv", (SAMPLE_DIR / "aws_tuban_format_b.csv").read_bytes(), "text/csv")),
+        ("files", ("aws_lamongan_format_c.csv", (SAMPLE_DIR / "aws_lamongan_format_c.csv").read_bytes(), "text/csv")),
     ]
-    r_upload = client.post("/api/etl/upload", headers=qc_headers, files=sample_files)
+    r_upload = client.post("/api/etl/upload", headers=datin_headers, files=sample_files)
     assert r_upload.status_code == 200, r_upload.text
     batches = r_upload.json()["batches"]
     assert len(batches) == 3
 
-    total_new_anomalies = sum(b["new_anomaly_cases"] for b in batches)
-    assert total_new_anomalies >= 12  # Expect ~15-17 anomalies across 3 stations
+    # Verify 10-minute vs 1-hour interval detection
+    intervals = {b["filename"]: b["interval_type"] for b in batches}
+    assert intervals["aws_tanjung_perak_10menit.csv"] == "10m"
+    assert intervals["aws_tuban_format_b.csv"] == "1h"
 
-    # Also test Excel (.xlsx) upload
+    # Verify wind speed m/s -> knots conversion in AWS-TBN (5.2 m/s -> ~10.11 knots)
+    ts_wind = client.get("/api/dashboard/timeseries?station_code=AWS-TBN&parameter_code=wind_speed&window_hours=24", headers=fc_headers).json()
+    assert ts_wind["unit"] == "knots"
+    converted_pts = [p for p in ts_wind["points"] if p["raw_value"] == "5,2"]
+    assert converted_pts and 10.0 <= converted_pts[0]["numeric_value"] <= 10.2
+
+    # Excel upload verification
     xlsx_buf = io.BytesIO()
     df_xlsx = pd.DataFrame(
-        [
-            {"waktu_obs": "2026-11-25 12:00:00", "stasiun": "AWS-KMY", "temp_c": 30.0, "rh_pct": 70.0},
-        ]
+        [{"waktu_obs": "2026-11-25 12:00:00", "stasiun": "AWS-TPRK", "temp_c": 30.2, "wind_ms": 5.0}]
     )
     df_xlsx.to_excel(xlsx_buf, index=False, engine="openpyxl")
     r_xlsx = client.post(
         "/api/etl/upload",
-        headers=qc_headers,
-        files={"files": ("test_kemayoran.xlsx", xlsx_buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=datin_headers,
+        files={"files": ("test_tprk.xlsx", xlsx_buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert r_xlsx.status_code == 200, r_xlsx.text
     assert r_xlsx.json()["batches"][0]["total_rows"] == 2
 
-    # Step 3: Dashboard updates dynamically with new observations & anomalies
+    # Step 3: Dashboard updates dynamically & supports interval filter
     dash_after = client.get("/api/dashboard", headers=mgr_headers).json()
     assert dash_after["kpis"]["total_observations"] > dash_before["kpis"]["total_observations"]
     assert dash_after["kpis"]["total_anomalies"] > dash_before["kpis"]["total_anomalies"]
     assert len(dash_after["by_station"]) == 3
-    assert len(dash_after["by_parameter"]) >= 5
 
-    # Test dashboard filter by station
-    dash_kmy = client.get("/api/dashboard?station_code=AWS-KMY", headers=mgr_headers).json()
-    assert len(dash_kmy["by_station"]) == 1
-    assert dash_kmy["by_station"][0]["station_code"] == "AWS-KMY"
+    dash_10m = client.get("/api/dashboard?interval_type=10m", headers=mgr_headers).json()
+    assert dash_10m["kpis"]["total_observations"] == 35  # 7 rows * 5 params in aws_tanjung_perak_10menit.csv
 
-    # Step 4: Staf QC inspects Critical/Missing anomaly detail (RACI + SOP)
-    anoms = client.get("/api/anomalies?severity=Critical/Missing&status=Open", headers=qc_headers).json()
+    # Step 4: Inspect anomaly detail (RACI, Blueprint SOP, nearby tendency context)
+    anoms = client.get("/api/anomalies?severity=Critical/Missing&status=Open", headers=datin_headers).json()
     assert len(anoms) > 0
-    target_case = next((a for a in anoms if a["station_code"] == "AWS-KMY"), anoms[0])
-    detail = client.get(f"/api/anomalies/{target_case['id']}", headers=qc_headers).json()
-    assert "Teknisi" in detail["raci"]["responsible"]
+    target_case = next((a for a in anoms if a["station_code"] == "AWS-TPRK"), anoms[0])
+    detail = client.get(f"/api/anomalies/{target_case['id']}", headers=fc_headers).json()
+    assert "Observer" in detail["raci"]["responsible"]
     assert "Data Owner" in detail["raci"]["accountable"]
     assert len(detail["sop"]["steps"]) >= 3
+    assert len(detail["nearby_timeseries"]) >= 2
 
-    # RBAC: Manajemen cannot update case status
-    r_mgr_patch = client.patch(
-        f"/api/anomalies/{target_case['id']}/status",
-        headers=mgr_headers,
-        json={"status": "Resolved", "resolution_notes": "Mencoba ubah"},
-    )
-    assert r_mgr_patch.status_code == 403
+    # RBAC: Manajemen & Forecaster cannot directly set Resolved status
+    for ro_hdr in (mgr_headers, fc_headers):
+        r_ro = client.patch(
+            f"/api/anomalies/{target_case['id']}/status",
+            headers=ro_hdr,
+            json={"status": "Resolved", "resolution_notes": "Mencoba ubah langsung"},
+        )
+        assert r_ro.status_code == 403
 
-    # Step 5: Teknisi resolves the case with repair notes
+    # Step 5A: Observer resolves the case
     r_resolve = client.patch(
         f"/api/anomalies/{target_case['id']}/status",
-        headers=tek_headers,
-        json={"status": "Resolved", "resolution_notes": "Sensor AWS dikalibrasi ulang dan logger di-restart."},
+        headers=obs_headers,
+        json={"status": "Resolved", "resolution_notes": "Backfill log 10-menit AWS Tanjung Perak selesai dilakukan."},
     )
-    assert r_resolve.status_code == 200, r_resolve.text
+    assert r_resolve.status_code == 200
     assert r_resolve.json()["status"] == "Resolved"
 
-    # Staf QC verifies resolution
+    # Step 5B: Forecaster finds discrepancy & returns case to Datin
+    r_ret = client.post(
+        f"/api/anomalies/{target_case['id']}/return-to-datin",
+        headers=fc_headers,
+        json={"notes": "Nilai suhu masih belum sinkron dengan radar maritim, mohon cek ulang Datin."},
+    )
+    assert r_ret.status_code == 200
+    assert r_ret.json()["status"] == "Open"
+
+    # Step 5C: Observer fixes again & Datin verifies
+    client.patch(
+        f"/api/anomalies/{target_case['id']}/status",
+        headers=obs_headers,
+        json={"status": "Resolved", "resolution_notes": "Sensor dikalibrasi ulang di lapangan."},
+    )
     r_verify = client.patch(
         f"/api/anomalies/{target_case['id']}/status",
-        headers=qc_headers,
-        json={"status": "Verified", "resolution_notes": "Data observasi pasca-perbaikan telah diverifikasi valid."},
+        headers=datin_headers,
+        json={"status": "Verified", "resolution_notes": "Data terverifikasi valid untuk layanan Forecaster."},
     )
     assert r_verify.status_code == 200
     assert r_verify.json()["status"] == "Verified"
 
     # Escalation simulation on another Open case
-    open_cases = client.get("/api/anomalies?status=Open", headers=qc_headers).json()
+    open_cases = client.get("/api/anomalies?status=Open", headers=datin_headers).json()
     assert len(open_cases) > 0
-    esc_case = open_cases[0]
     r_esc = client.post(
-        f"/api/anomalies/{esc_case['id']}/escalate",
-        headers=qc_headers,
-        json={"reason": "Melewati batas SLA 4 jam untuk Critical/Missing."},
+        f"/api/anomalies/{open_cases[0]['id']}/escalate",
+        headers=datin_headers,
+        json={"reason": "Melewati batas SLA 4 jam."},
     )
     assert r_esc.status_code == 200
     assert r_esc.json()["is_escalated"] is True
 
-    # Step 6: Audit trail contains all actions and cannot be deleted
+    # Step 6: Immutable Audit Trail captures full lifecycle
     audit_logs = client.get(f"/api/governance/audit-trail?case_code={target_case['case_code']}", headers=mgr_headers).json()
     actions = {log["action_type"] for log in audit_logs}
-    assert {"DETECTED", "STATUS_CHANGE", "VERIFIED"}.issubset(actions)
+    assert {"DETECTED", "STATUS_CHANGE", "RETURNED_TO_DATIN", "VERIFIED"}.issubset(actions)
+    assert client.delete("/api/governance/audit-trail", headers=datin_headers).status_code == 405
 
-    # Confirm immutability (no DELETE endpoint)
-    r_del = client.delete("/api/governance/audit-trail", headers=qc_headers)
-    assert r_del.status_code == 405
-
-    # Reset demo data back to clean baseline after test
-    client.post("/api/etl/reset-demo", headers=qc_headers)
+    # Reset back to clean 24h baseline
+    client.post("/api/etl/reset-demo", headers=datin_headers)

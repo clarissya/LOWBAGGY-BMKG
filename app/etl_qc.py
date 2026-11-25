@@ -38,7 +38,6 @@ def _read_dataframe(file_bytes: bytes, filename: str) -> pd.DataFrame:
     if lower_name.endswith(".xlsx") or lower_name.endswith(".xls"):
         return pd.read_excel(io.BytesIO(file_bytes), dtype=str)
 
-    # Decode text with BOM handling
     text = file_bytes.decode("utf-8-sig", errors="replace")
     sample = text[:4096]
     delimiter = ","
@@ -48,8 +47,7 @@ def _read_dataframe(file_bytes: bytes, filename: str) -> pd.DataFrame:
     except Exception:
         if sample.count(";") > sample.count(","):
             delimiter = ";"
-    df = pd.read_csv(io.StringIO(text), sep=delimiter, dtype=str, keep_default_na=False)
-    return df
+    return pd.read_csv(io.StringIO(text), sep=delimiter, dtype=str, keep_default_na=False)
 
 
 def _parse_timestamp(raw_ts: str) -> Optional[datetime]:
@@ -90,17 +88,16 @@ def _resolve_station(raw_station: str, stations_by_code: Dict[str, Station], sta
         if low == name_low or low in name_low or name_low in low:
             return st.station_code, st.station_name
 
-    # Fuzzy keyword matching for common station short names
-    if "kemayoran" in low or "kmy" in low:
-        st = stations_by_code.get("AWS-KMY")
+    if "perak" in low or "surabaya" in low or "tprk" in low:
+        st = stations_by_code.get("AWS-TPRK")
         if st:
             return st.station_code, st.station_name
-    if "bogor" in low or "bgr" in low:
-        st = stations_by_code.get("AWS-BGR")
+    if "tuban" in low or "tbn" in low:
+        st = stations_by_code.get("AWS-TBN")
         if st:
             return st.station_code, st.station_name
-    if "priok" in low or "tpr" in low:
-        st = stations_by_code.get("AWS-TPR")
+    if "lamongan" in low or "brondong" in low or "lmg" in low:
+        st = stations_by_code.get("AWS-LMG")
         if st:
             return st.station_code, st.station_name
 
@@ -109,14 +106,13 @@ def _resolve_station(raw_station: str, stations_by_code: Dict[str, Station], sta
 
 
 def _parse_numeric(raw_val: str, raw_col_name: str, param_code: str) -> Tuple[Optional[float], str, bool]:
-    """Returns (numeric_value, display_raw, is_missing_or_corrupt)."""
+    """Parse numeric value and normalize maritime wind speed (m/s -> knots per BMKG Forecaster standard)."""
     if raw_val is None:
         return None, "NULL", True
     s = str(raw_val).strip()
     if s.lower() in MISSING_TOKENS:
         return None, s if s else "NULL", True
 
-    # Support comma decimal format e.g. "28,4"
     cleaned = s.replace(",", ".")
     try:
         val = float(cleaned)
@@ -125,11 +121,30 @@ def _parse_numeric(raw_val: str, raw_col_name: str, param_code: str) -> Tuple[Op
     except ValueError:
         return None, s, True
 
-    # Unit normalization: convert knots to m/s if column indicates knots
-    if param_code == "wind_speed" and ("kt" in raw_col_name or "knot" in raw_col_name):
-        val = round(val * 0.514444, 2)
+    # Convert m/s to knots when column name indicates m/s (or ws10m / kec_angin without 'kt')
+    if param_code == "wind_speed":
+        is_explicit_knots = "kt" in raw_col_name or "knot" in raw_col_name
+        is_ms = "ms" in raw_col_name or "m_s" in raw_col_name or raw_col_name == "ws10m" or raw_col_name == "kec_angin"
+        if is_ms and not is_explicit_knots:
+            val = round(val * 1.94384, 2)
 
-    return round(val, 3), s, False
+    return round(val, 2), s, False
+
+
+def _detect_interval_type(timestamps: List[datetime]) -> str:
+    """Detect whether data cadence is 10-minute (UPT archive) or 1-hour (Pusat feed)."""
+    if len(timestamps) < 2:
+        return "1h"
+    sorted_ts = sorted(set(timestamps))
+    diffs = [
+        (sorted_ts[i] - sorted_ts[i - 1]).total_seconds() / 60.0
+        for i in range(1, len(sorted_ts))
+        if (sorted_ts[i] - sorted_ts[i - 1]).total_seconds() > 0
+    ]
+    if not diffs:
+        return "1h"
+    median_mins = sorted(diffs)[len(diffs) // 2]
+    return "10m" if median_mins <= 20 else "1h"
 
 
 def _find_raci(station_code: str, param_code: str, raci_rows: List[RaciRegistry]) -> RaciRegistry:
@@ -162,7 +177,6 @@ def process_etl_upload(
     if df.empty:
         raise ValueError(f"File '{filename}' kosong atau tidak memiliki baris data.")
 
-    # Load governance metadata
     dd_list = db.query(DataDictionary).all()
     stations = db.query(Station).all()
     raci_list = db.query(RaciRegistry).all()
@@ -179,7 +193,6 @@ def process_etl_upload(
             if norm_a:
                 alias_to_dd[norm_a] = dd
 
-    # Map dataframe columns
     col_map = {_norm_col(c): c for c in df.columns}
     ts_col = next((col_map[c] for c in col_map if c in TIMESTAMP_ALIASES), None)
     st_col = next((col_map[c] for c in col_map if c in STATION_ALIASES), None)
@@ -189,7 +202,6 @@ def process_etl_upload(
             f"Kolom timestamp tidak ditemukan di '{filename}'. Gunakan salah satu alias: {', '.join(sorted(TIMESTAMP_ALIASES))}"
         )
 
-    # Detect wide parameter columns vs long format
     param_cols: List[Tuple[str, str, DataDictionary]] = []
     for norm_c, orig_c in col_map.items():
         if norm_c in alias_to_dd:
@@ -204,8 +216,8 @@ def process_etl_upload(
             f"Tidak ada kolom parameter cuaca yang dikenali di Data Dictionary pada file '{filename}'."
         )
 
-    # Build standardized candidate observations
     candidates = []
+    parsed_timestamps = []
     fallback_station = filename.split(".")[0].upper()[:16]
 
     for _, row in df.iterrows():
@@ -215,6 +227,7 @@ def process_etl_upload(
             ts_corrupt = True
         else:
             ts_corrupt = False
+            parsed_timestamps.append(obs_time)
 
         raw_st = row[st_col] if st_col else fallback_station
         station_code, station_name = _resolve_station(raw_st, stations_by_code, stations_by_name)
@@ -256,10 +269,9 @@ def process_etl_upload(
     if not candidates:
         raise ValueError(f"Tidak ada baris observasi yang dapat diproses dari '{filename}'.")
 
-    # Sort chronologically per station & parameter for temporal WMO-No. 8 checks
+    interval_type = _detect_interval_type(parsed_timestamps)
     candidates.sort(key=lambda x: (x["station_code"], x["dd"].parameter_code, x["observed_at"]))
 
-    # Fetch recent historical valid numeric values from DB per (station, param) for continuity
     last_seen: Dict[Tuple[str, str], Tuple[datetime, float, int]] = {}
     recent_records = (
         db.query(ObservationRecord)
@@ -283,6 +295,7 @@ def process_etl_upload(
         filename=filename,
         uploaded_by=actor.username,
         uploaded_at=now,
+        interval_type=interval_type,
     )
     db.add(batch)
     db.flush()
@@ -308,7 +321,6 @@ def process_etl_upload(
         qc_detail = "Lolos seluruh validasi skema dan kualitas WMO-No. 8."
         schema_valid = True
 
-        # 1. Missing Data / Corrupt Schema Check
         if item["ts_corrupt"]:
             qc_status = "Critical/Missing"
             qc_rule = "Missing Data"
@@ -320,7 +332,6 @@ def process_etl_upload(
             qc_detail = f"Data {dd.display_name} hilang/kosong atau bernilai sentinel ('{raw_v}')."
             schema_valid = False
         else:
-            # 2. Gross Range Check (Physical & Climatological)
             if val < dd.physical_min or val > dd.physical_max:
                 qc_status = "Critical/Missing"
                 qc_rule = "Range Check"
@@ -337,29 +348,27 @@ def process_etl_upload(
                     f"[{dd.valid_min}, {dd.valid_max}] {dd.standard_unit}."
                 )
             else:
-                # 3. Temporal Step Check & Persistence Check
                 prev = last_seen.get(key)
                 if prev is not None:
                     prev_time, prev_val, streak = prev
                     hours_diff = (obs_at - prev_time).total_seconds() / 3600.0
                     if 0 < hours_diff <= 3.0:
                         step_rate = abs(val - prev_val) / max(hours_diff, 1.0)
-                        if step_rate > dd.max_step_per_hour * 1.8:
+                        if step_rate > dd.max_step_per_hour * 1.6:
                             qc_status = "Critical/Missing"
                             qc_rule = "Step Check"
                             qc_detail = (
                                 f"Lonjakan ekstrem {abs(val - prev_val):.2f} {dd.standard_unit} "
-                                f"(dari {prev_val} ke {val} dalam {hours_diff:.1f} jam; batas {dd.max_step_per_hour}/jam)."
+                                f"(dari {prev_val} ke {val} dalam {hours_diff:.2f} jam; batas {dd.max_step_per_hour}/jam)."
                             )
                         elif step_rate > dd.max_step_per_hour:
                             qc_status = "Warning/Suspect"
                             qc_rule = "Step Check"
                             qc_detail = (
                                 f"Lonjakan drastis {abs(val - prev_val):.2f} {dd.standard_unit} "
-                                f"(dari {prev_val} ke {val} dalam {hours_diff:.1f} jam; batas {dd.max_step_per_hour}/jam)."
+                                f"(dari {prev_val} ke {val} dalam {hours_diff:.2f} jam; batas {dd.max_step_per_hour}/jam)."
                             )
 
-                    # Persistence Check (exclude rainfall == 0.0)
                     if val == prev_val and not (dd.parameter_code == "rainfall" and val == 0.0):
                         new_streak = streak + 1
                     else:
@@ -394,6 +403,7 @@ def process_etl_upload(
         obs_rec = ObservationRecord(
             batch_id=batch.id,
             observed_at=obs_at,
+            interval_type=interval_type,
             station_code=scode,
             station_name=sname,
             parameter_code=dd.parameter_code,
@@ -458,7 +468,7 @@ def process_etl_upload(
                     new_status="Open",
                     assigned_pic=raci.assigned_pic_name,
                     notes=(
-                        f"[{qc_rule}] Terdeteksi pada {sname} ({dd.display_name}={raw_v}). "
+                        f"[{qc_rule}] Terdeteksi pada {sname} ({dd.display_name}={raw_v}, interval {interval_type}). "
                         f"Otomatis ditugaskan ke {raci.assigned_pic_name} ({raci.responsible_role})."
                     ),
                 )
@@ -484,7 +494,7 @@ def process_etl_upload(
             new_status="COMPLETED",
             assigned_pic="-",
             notes=(
-                f"Unggah ETL '{filename}' ({batch_code}): {len(candidates)} observasi distandarkan "
+                f"Unggah ETL '{filename}' ({batch_code}, interval {interval_type}): {len(candidates)} observasi distandarkan "
                 f"(Valid: {valid_count}, Warning: {warning_count}, Critical/Missing: {critical_count})."
             ),
         )
@@ -496,6 +506,7 @@ def process_etl_upload(
         "batch_code": batch.batch_code,
         "filename": batch.filename,
         "uploaded_at": batch.uploaded_at.isoformat(),
+        "interval_type": batch.interval_type,
         "total_rows": batch.total_rows,
         "valid_count": batch.valid_count,
         "warning_count": batch.warning_count,

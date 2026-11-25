@@ -3,23 +3,38 @@ const state = {
   user: null,
   filters: { stations: [], parameters: [] },
   dashboardData: null,
-  chartMode: "station", // 'station' | 'parameter'
+  chartMode: "station",
+  trendWindow: 24,
   barChart: null,
   pieChart: null,
+  trendChart: null,
   currentCaseId: null,
 };
 
 const ROLE_LABELS = {
-  staf_qc: "Staf QC / Datin",
-  teknisi: "Teknisi / Unit Observasi",
-  manajemen: "Manajemen",
+  staf_qc: "Datin / Staf QC",
+  teknisi: "Observer / Teknisi AWS",
+  forecaster: "Forecaster / Prakiraan",
+  manajemen: "Manajemen / Kepala UPT",
 };
 
 const PAGE_TITLES = {
-  dashboard: ["Beranda (Dashboard Ringkasan Kualitas Data)", "Pemantauan kesehatan data observasi AWS lintas stasiun"],
-  etl: ["Import Data & Mesin QC Otomatis (Modul ETL)", "Standardisasi skema & validasi otomatis standar WMO-No. 8"],
-  anomalies: ["Monitoring Anomali & Tindak Lanjut", "Pelacakan anomali, penugasan RACI otomatis, panduan SOP & eskalasi"],
-  governance: ["Modul Tata Kelola & Jejak Audit", "Rekam jejak audit permanen, Data Dictionary & RACI Registry"],
+  dashboard: [
+    "Beranda & Grafik Tendensi Kualitas Data",
+    "Alur Data AWS Maritim: Observer → Datin (QC & Arsip) → Forecaster",
+  ],
+  etl: [
+    "Import Data & Mesin QC Otomatis (Modul ETL)",
+    "Standardisasi data 10-menit/1-jam, konversi angin ke knots & validasi WMO-No. 8",
+  ],
+  anomalies: [
+    "Monitoring Anomali & Tindak Lanjut",
+    "Pelacakan suspect, penugasan RACI otomatis, rancangan SOP & pengembalian Forecaster",
+  ],
+  governance: [
+    "Modul Tata Kelola & Jejak Audit",
+    "Blueprint RACI (Observer–Datin–Forecaster), Usulan SOP, Data Dictionary & Audit Trail",
+  ],
 };
 
 async function apiFetch(url, options = {}) {
@@ -65,6 +80,18 @@ function fmtDateTime(isoStr) {
   });
 }
 
+function fmtShortTime(isoStr) {
+  if (!isoStr) return "-";
+  const d = new Date(isoStr.endsWith("Z") ? isoStr : isoStr + "Z");
+  if (isNaN(d.getTime())) return isoStr;
+  return d.toLocaleString("id-ID", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
@@ -96,7 +123,6 @@ async function login(username, password) {
 function logout() {
   state.token = null;
   state.user = null;
-  localStorage.setItem("bmkg_token", "");
   localStorage.removeItem("bmkg_token");
   document.getElementById("app-view").classList.add("hidden");
   document.getElementById("login-view").classList.remove("hidden");
@@ -137,10 +163,10 @@ function updateUserHeader(notifs) {
   const notifText = document.getElementById("role-notif-text");
   if (u.role === "teknisi") {
     notifPill.classList.remove("hidden");
-    notifText.textContent = `${notifs.assigned_open_cases} kasus anomali ditugaskan ke Anda`;
-  } else if (u.role === "staf_qc") {
+    notifText.textContent = `${notifs.assigned_open_cases} kasus ditugaskan ke Anda`;
+  } else if (u.role === "staf_qc" || u.role === "forecaster") {
     notifPill.classList.remove("hidden");
-    notifText.textContent = `${notifs.total_open_cases} kasus anomali aktif`;
+    notifText.textContent = `${notifs.total_open_cases} kasus anomali / suspect aktif`;
   } else {
     notifPill.classList.add("hidden");
   }
@@ -159,9 +185,6 @@ function applyRolePermissions() {
     readonlyBanner.classList.remove("hidden");
     document.getElementById("etl-role-label").textContent = ROLE_LABELS[role] || role;
   }
-
-  // Teknisi defaults "Tugas Saya" unchecked or checked? Leave unchecked so all cases are visible,
-  // but notif pill lets them jump straight to assigned cases!
 }
 
 async function refreshNotifications() {
@@ -177,7 +200,7 @@ async function loadFilterOptions() {
 
   const populateSelect = (id, items, valKey, labelKey, defaultLabel) => {
     const sel = document.getElementById(id);
-    sel.innerHTML = `<option value="ALL">${defaultLabel}</option>`;
+    sel.innerHTML = defaultLabel ? `<option value="ALL">${defaultLabel}</option>` : "";
     for (const item of items) {
       const opt = document.createElement("option");
       opt.value = item[valKey];
@@ -190,6 +213,9 @@ async function loadFilterOptions() {
   populateSelect("anom-station", meta.stations, "station_code", "station_name", "Semua Stasiun");
   populateSelect("dash-param", meta.parameters, "parameter_code", "display_name", "Semua Parameter");
   populateSelect("anom-param", meta.parameters, "parameter_code", "display_name", "Semua Parameter");
+
+  populateSelect("trend-station", meta.stations, "station_code", "station_name", null);
+  populateSelect("trend-param", meta.parameters, "parameter_code", "display_name", null);
 }
 
 function switchPage(pageName) {
@@ -204,13 +230,16 @@ function switchPage(pageName) {
   document.getElementById("page-title").textContent = title;
   document.getElementById("page-subtitle").textContent = sub;
 
-  if (pageName === "dashboard") loadDashboard();
+  if (pageName === "dashboard") {
+    loadDashboard();
+    loadTendencyChart();
+  }
   if (pageName === "etl") loadEtlPage();
   if (pageName === "anomalies") loadAnomalies();
   if (pageName === "governance") loadGovernancePage();
 }
 
-// ==================== PAGE 1: DASHBOARD ====================
+// ==================== PAGE 1: DASHBOARD & TENDENCY ====================
 
 async function loadDashboard() {
   const params = new URLSearchParams();
@@ -218,16 +247,82 @@ async function loadDashboard() {
   const eDate = document.getElementById("dash-end").value;
   const st = document.getElementById("dash-station").value;
   const pm = document.getElementById("dash-param").value;
+  const iv = document.getElementById("dash-interval").value;
   if (sDate) params.set("start_date", sDate);
   if (eDate) params.set("end_date", eDate);
   if (st && st !== "ALL") params.set("station_code", st);
   if (pm && pm !== "ALL") params.set("parameter_code", pm);
+  if (iv && iv !== "ALL") params.set("interval_type", iv);
 
   const data = await apiFetch(`/api/dashboard?${params.toString()}`);
   state.dashboardData = data;
   renderDashboardKPIs(data.kpis);
   renderDashboardCharts(data);
   renderStationSummaryTable(data.by_station);
+}
+
+async function loadTendencyChart() {
+  if (typeof Chart === "undefined") return;
+  const st = document.getElementById("trend-station").value || "AWS-TPRK";
+  const pm = document.getElementById("trend-param").value || "temperature";
+  const data = await apiFetch(
+    `/api/dashboard/timeseries?station_code=${encodeURIComponent(st)}&parameter_code=${encodeURIComponent(pm)}&window_hours=${state.trendWindow}`
+  );
+
+  const pts = data.points || [];
+  const labels = pts.map((p) => fmtShortTime(p.observed_at));
+  const values = pts.map((p) => p.numeric_value);
+  const pointColors = pts.map((p) => {
+    if (p.qc_status === "Critical/Missing") return "#e11d48";
+    if (p.qc_status === "Warning/Suspect") return "#f59e0b";
+    return "#2563eb";
+  });
+  const pointRadii = pts.map((p) => (p.qc_status === "Valid" ? 3.5 : 7));
+
+  if (state.trendChart) state.trendChart.destroy();
+  const ctx = document.getElementById("chart-tendency").getContext("2d");
+  state.trendChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `${data.parameter_name || pm} (${data.unit || ""})`,
+          data: values,
+          borderColor: "#2563eb",
+          backgroundColor: "rgba(37, 99, 235, 0.1)",
+          fill: true,
+          tension: 0.25,
+          spanGaps: false,
+          pointBackgroundColor: pointColors,
+          pointBorderColor: "#ffffff",
+          pointBorderWidth: 1.5,
+          pointRadius: pointRadii,
+          pointHoverRadius: 8,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: "#eef2f6" } },
+      },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            afterLabel: (context) => {
+              const p = pts[context.dataIndex];
+              if (!p) return "";
+              return p.qc_status === "Valid" ? "Status QC: Valid" : `SUSPECT (${p.qc_rule_triggered}): ${p.qc_detail}`;
+            },
+          },
+        },
+      },
+    },
+  });
 }
 
 function renderDashboardKPIs(kpis) {
@@ -340,7 +435,7 @@ async function loadEtlPage() {
     .map(
       (s) => `
     <li>
-      <span>📄 <strong>${escapeHtml(s.filename)}</strong> <span class="muted">(${s.size_bytes} B)</span></span>
+      <span><strong>${escapeHtml(s.filename)}</strong> <span class="muted">(${s.size_bytes} B)</span></span>
       <a class="btn btn-outline btn-sm" href="/api/samples/download/${encodeURIComponent(s.filename)}" download>Unduh</a>
     </li>`
     )
@@ -353,6 +448,7 @@ async function loadEtlPage() {
     <tr>
       <td><code>${escapeHtml(b.batch_code)}</code></td>
       <td>${escapeHtml(b.filename)}</td>
+      <td><span class="badge badge-slate">${escapeHtml(b.interval_type || "1h")}</span></td>
       <td>${escapeHtml(b.uploaded_by)}</td>
       <td>${fmtDateTime(b.uploaded_at)}</td>
       <td>${escapeHtml(b.stations_detected)}</td>
@@ -376,6 +472,7 @@ function renderEtlResult(resp) {
     <tr>
       <td><code>${escapeHtml(b.batch_code)}</code></td>
       <td>${escapeHtml(b.filename)}</td>
+      <td><span class="badge badge-slate">${escapeHtml(b.interval_type || "1h")}</span></td>
       <td>${escapeHtml((b.stations_detected || []).join(", "))}</td>
       <td>${b.total_rows}</td>
       <td><span class="badge badge-success">${b.valid_count}</span></td>
@@ -392,7 +489,7 @@ function renderEtlResult(resp) {
       <table>
         <thead>
           <tr>
-            <th>Batch</th><th>File</th><th>Stasiun</th><th>Observasi</th>
+            <th>Batch</th><th>File</th><th>Interval</th><th>Stasiun</th><th>Observasi</th>
             <th>Valid</th><th>Warning</th><th>Critical/Missing</th><th>Kasus Dibuat</th>
           </tr>
         </thead>
@@ -470,7 +567,7 @@ async function openCaseModal(caseId) {
   state.currentCaseId = caseId;
   const detail = await apiFetch(`/api/anomalies/${caseId}`);
 
-  document.getElementById("modal-case-code").textContent = `${detail.case_code} · ${detail.severity}`;
+  document.getElementById("modal-case-code").textContent = `${detail.case_code} · ${detail.severity} · Interval ${detail.interval_type || "1h"}`;
   document.getElementById("modal-case-title").textContent = `${detail.station_name} — ${detail.parameter_name}`;
 
   document.getElementById("modal-error-details").innerHTML = `
@@ -481,20 +578,31 @@ async function openCaseModal(caseId) {
   `;
 
   document.getElementById("modal-raci-details").innerHTML = `
-    <div class="raci-row"><span class="raci-letter">R</span><div><strong>Responsible (PIC Lapangan):</strong><br>${escapeHtml(detail.raci.assigned_pic_name)} — ${escapeHtml(detail.raci.responsible)}</div></div>
+    <div class="raci-row"><span class="raci-letter">R</span><div><strong>Responsible (Observer / Teknisi):</strong><br>${escapeHtml(detail.raci.assigned_pic_name)} — ${escapeHtml(detail.raci.responsible)}</div></div>
     <div class="raci-row"><span class="raci-letter">A</span><div><strong>Accountable (Data Owner):</strong><br>${escapeHtml(detail.raci.accountable)}</div></div>
-    <div class="raci-row"><span class="raci-letter">C</span><div><strong>Consulted (Data Steward):</strong><br>${escapeHtml(detail.raci.consulted)}</div></div>
+    <div class="raci-row"><span class="raci-letter">C</span><div><strong>Consulted (Datin &amp; Forecaster):</strong><br>${escapeHtml(detail.raci.consulted)}</div></div>
     <div class="raci-row"><span class="raci-letter">I</span><div><strong>Informed:</strong><br>${escapeHtml(detail.raci.informed)}</div></div>
   `;
 
-  document.getElementById("modal-sop-title").textContent = `3. Panduan SOP (${detail.sop.sop_code}): ${detail.sop.title}`;
+  // Nearby tendency strip
+  const nearbyStrip = document.getElementById("modal-nearby-strip");
+  const nearPts = detail.nearby_timeseries || [];
+  nearbyStrip.innerHTML = nearPts.length
+    ? nearPts
+        .map((n) => {
+          const cls = n.is_current ? "is-current" : n.qc_status !== "Valid" ? "is-warn" : "";
+          return `<div class="nearby-chip ${cls}"><div>${fmtShortTime(n.observed_at)}</div><strong>${escapeHtml(n.raw_value)} ${escapeHtml(detail.unit)}</strong></div>`;
+        })
+        .join("")
+    : `<span class="muted small">Tidak ada histori waktu berdekatan.</span>`;
+
+  document.getElementById("modal-sop-title").textContent = `3. Rancangan SOP (${detail.sop.sop_code}): ${detail.sop.title}`;
   document.getElementById("modal-sop-steps").innerHTML = detail.sop.steps
     .map((s) => `<li>${escapeHtml(s.replace(/^\d+\.\s*/, ""))}</li>`)
     .join("");
 
   const statusSelect = document.getElementById("modal-status-select");
   statusSelect.value = detail.status;
-  // Teknisi cannot verify
   const verifyOpt = statusSelect.querySelector('option[value="Verified"]');
   if (verifyOpt) verifyOpt.disabled = state.user.role === "teknisi";
 
@@ -509,12 +617,19 @@ async function openCaseModal(caseId) {
     slaInfo.innerHTML = `<span class="badge badge-success">Dalam SLA</span> Batas: ${fmtDateTime(detail.sla_due_at)}`;
   }
 
-  const canModify = state.user.role === "staf_qc" || state.user.role === "teknisi";
-  document.getElementById("modal-save-btn").disabled = !canModify;
-  document.getElementById("modal-escalate-btn").disabled = !canModify || detail.status === "Resolved" || detail.status === "Verified";
-  document.getElementById("modal-readonly-note").classList.toggle("hidden", canModify);
-  statusSelect.disabled = !canModify;
-  document.getElementById("modal-notes-input").disabled = !canModify;
+  const role = state.user.role;
+  const canUpdateStatus = role === "staf_qc" || role === "teknisi";
+  const canReturnToDatin = role === "forecaster" || role === "staf_qc";
+  const isReadonlyAll = role === "manajemen";
+
+  document.getElementById("modal-save-btn").classList.toggle("hidden", !canUpdateStatus);
+  document.getElementById("modal-escalate-btn").classList.toggle("hidden", !canUpdateStatus);
+  document.getElementById("modal-escalate-btn").disabled = !canUpdateStatus || detail.status === "Resolved" || detail.status === "Verified";
+  document.getElementById("modal-return-datin-btn").classList.toggle("hidden", !canReturnToDatin);
+
+  document.getElementById("modal-readonly-note").classList.toggle("hidden", !isReadonlyAll);
+  statusSelect.disabled = !canUpdateStatus;
+  document.getElementById("modal-notes-input").disabled = isReadonlyAll;
 
   const histBox = document.getElementById("modal-history-list");
   histBox.innerHTML = detail.history
@@ -571,7 +686,7 @@ async function loadDataDictionary() {
     <tr>
       <td><code>${escapeHtml(d.parameter_code)}</code></td>
       <td><strong>${escapeHtml(d.display_name)}</strong></td>
-      <td>${escapeHtml(d.standard_unit)}</td>
+      <td><strong>${escapeHtml(d.standard_unit)}</strong></td>
       <td><span class="small muted">${escapeHtml(d.accepted_aliases)}</span></td>
       <td>${d.valid_min} .. ${d.valid_max}</td>
       <td>${d.physical_min} .. ${d.physical_max}</td>
@@ -621,7 +736,6 @@ async function loadRaciAndSops() {
 // ==================== EVENT WIRING ====================
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Login form & quick demo buttons
   document.getElementById("login-form").addEventListener("submit", (e) => {
     e.preventDefault();
     login(
@@ -640,7 +754,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("logout-btn").addEventListener("click", logout);
 
-  // Sidebar navigation
   document.querySelectorAll(".nav-item").forEach((btn) => {
     btn.addEventListener("click", () => switchPage(btn.dataset.page));
   });
@@ -652,14 +765,29 @@ document.addEventListener("DOMContentLoaded", () => {
     switchPage("anomalies");
   });
 
-  // Dashboard filters & chart toggle
   document.getElementById("dash-apply-btn").addEventListener("click", loadDashboard);
   document.getElementById("dash-reset-btn").addEventListener("click", () => {
     document.getElementById("dash-start").value = "";
     document.getElementById("dash-end").value = "";
     document.getElementById("dash-station").value = "ALL";
     document.getElementById("dash-param").value = "ALL";
+    document.getElementById("dash-interval").value = "ALL";
     loadDashboard();
+  });
+
+  document.getElementById("trend-station").addEventListener("change", loadTendencyChart);
+  document.getElementById("trend-param").addEventListener("change", loadTendencyChart);
+  document.getElementById("trend-win-24").addEventListener("click", () => {
+    state.trendWindow = 24;
+    document.getElementById("trend-win-24").classList.add("active");
+    document.getElementById("trend-win-72").classList.remove("active");
+    loadTendencyChart();
+  });
+  document.getElementById("trend-win-72").addEventListener("click", () => {
+    state.trendWindow = 72;
+    document.getElementById("trend-win-72").classList.add("active");
+    document.getElementById("trend-win-24").classList.remove("active");
+    loadTendencyChart();
   });
 
   document.getElementById("chart-mode-station").addEventListener("click", () => {
@@ -676,7 +804,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.dashboardData) renderDashboardCharts(state.dashboardData);
   });
 
-  // ETL upload & demo controls
   const fileInput = document.getElementById("etl-file-input");
   fileInput.addEventListener("change", () => {
     const names = Array.from(fileInput.files).map((f) => f.name);
@@ -727,11 +854,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Anomaly filters
   document.getElementById("anom-filter-btn").addEventListener("click", loadAnomalies);
   document.getElementById("anom-mine-only").addEventListener("change", loadAnomalies);
 
-  // Modal handlers
   document.getElementById("modal-close-btn").addEventListener("click", () => {
     document.getElementById("case-modal").classList.add("hidden");
   });
@@ -759,13 +884,28 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  document.getElementById("modal-return-datin-btn").addEventListener("click", async () => {
+    if (!state.currentCaseId) return;
+    const notes = document.getElementById("modal-notes-input").value.trim() || "Temuan Forecaster: nilai tidak sesuai dengan kondisi cuaca aktual/radar, mohon verifikasi Datin.";
+    try {
+      await apiFetch(`/api/anomalies/${state.currentCaseId}/return-to-datin`, {
+        method: "POST",
+        body: JSON.stringify({ notes }),
+      });
+      showToast("Kasus berhasil dikembalikan ke Bidang Datin & tercatat di Audit Trail.", "success");
+      await Promise.all([openCaseModal(state.currentCaseId), loadAnomalies(), refreshNotifications()]);
+    } catch (err) {
+      showToast(err.message, "error");
+    }
+  });
+
   document.getElementById("modal-escalate-btn").addEventListener("click", async () => {
     if (!state.currentCaseId) return;
     try {
       await apiFetch(`/api/anomalies/${state.currentCaseId}/escalate`, {
         method: "POST",
         body: JSON.stringify({
-          reason: "Simulasi Eskalasi: Penanganan melewati target waktu SLA pada SOP terkait.",
+          reason: "Simulasi Eskalasi: Penanganan melewati target waktu SLA pada rancangan SOP.",
         }),
       });
       showToast("Eskalasi berhasil dicatat ke Data Owner & Audit Trail.", "success");
@@ -775,7 +915,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Governance subtabs
   document.querySelectorAll(".subtab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".subtab-btn").forEach((b) => b.classList.remove("active"));
@@ -789,7 +928,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("audit-filter-btn").addEventListener("click", loadAuditTrail);
 
-  // Resume session if token exists
   if (state.token) {
     enterApp();
   }

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -9,15 +9,14 @@ class LoginRequest(BaseModel):
 
 
 class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     full_name: str
     role: str
     unit_name: str
     assigned_station_code: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class LoginResponse(BaseModel):
@@ -32,6 +31,10 @@ class AnomalyStatusUpdate(BaseModel):
 
 class EscalationRequest(BaseModel):
     reason: Optional[str] = "Batas waktu SLA penanganan telah terlewati (Simulasi Eskalasi)."
+
+
+class ReturnToDatinRequest(BaseModel):
+    notes: str = Field(..., min_length=3)
 
 
 class DataDictionaryCreate(BaseModel):
@@ -78,6 +81,7 @@ class EtlBatchSummary(BaseModel):
     batch_code: str
     filename: str
     uploaded_at: datetime
+    interval_type: str
     total_rows: int
     valid_count: int
     warning_count: int

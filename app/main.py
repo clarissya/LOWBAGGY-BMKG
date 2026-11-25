@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 import uuid
@@ -34,6 +34,7 @@ from app.schemas import (
     LoginRequest,
     LoginResponse,
     RaciUpdate,
+    ReturnToDatinRequest,
     UserOut,
 )
 from app.seed import seed_baseline_observations, seed_reference_data
@@ -119,7 +120,7 @@ def get_filter_metadata(current_user: User = Depends(get_current_user), db: Sess
     }
 
 
-# ==================== PAGE 1: DASHBOARD ====================
+# ==================== PAGE 1: DASHBOARD & TENDENCY CHART ====================
 
 @app.get("/api/dashboard")
 def get_dashboard(
@@ -127,6 +128,7 @@ def get_dashboard(
     end_date: Optional[str] = Query(default=None),
     station_code: Optional[str] = Query(default=None),
     parameter_code: Optional[str] = Query(default=None),
+    interval_type: Optional[str] = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -153,6 +155,8 @@ def get_dashboard(
     if parameter_code and parameter_code != "ALL":
         obs_q = obs_q.filter(ObservationRecord.parameter_code == parameter_code)
         case_q = case_q.filter(AnomalyCase.parameter_code == parameter_code)
+    if interval_type and interval_type != "ALL":
+        obs_q = obs_q.filter(ObservationRecord.interval_type == interval_type)
 
     observations = obs_q.all()
     cases = case_q.all()
@@ -189,7 +193,6 @@ def get_dashboard(
     else:
         sop_compliance_pct = 100.0
 
-    # Aggregation by Station
     station_agg = {}
     for o in observations:
         st = station_agg.setdefault(
@@ -232,7 +235,6 @@ def get_dashboard(
         st["completeness_pct"] = round((st["non_missing"] / st["total"]) * 100, 1) if st["total"] else 0.0
         by_station.append(st)
 
-    # Aggregation by Parameter
     param_agg = {}
     for o in observations:
         pm = param_agg.setdefault(
@@ -262,7 +264,6 @@ def get_dashboard(
         pm["completeness_pct"] = round((pm["non_missing"] / pm["total"]) * 100, 1) if pm["total"] else 0.0
         by_parameter.append(pm)
 
-    # Aggregation by Violation Type
     violation_counts = {}
     for o in observations:
         if o.qc_status != "Valid":
@@ -286,6 +287,52 @@ def get_dashboard(
         "by_station": by_station,
         "by_parameter": by_parameter,
         "by_violation": by_violation,
+    }
+
+
+@app.get("/api/dashboard/timeseries")
+def get_dashboard_timeseries(
+    station_code: str = Query(default="AWS-TPRK"),
+    parameter_code: str = Query(default="temperature"),
+    window_hours: int = Query(default=24),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return 24-hour or 72-hour (3-day) tendency series with QC flags for Forecaster & Datin."""
+    q = db.query(ObservationRecord).filter(
+        ObservationRecord.station_code == station_code,
+        ObservationRecord.parameter_code == parameter_code,
+    )
+    latest = q.order_by(ObservationRecord.observed_at.desc()).first()
+    if not latest:
+        return {"station_code": station_code, "parameter_code": parameter_code, "unit": "", "points": []}
+
+    cutoff = latest.observed_at - timedelta(hours=window_hours)
+    rows = (
+        q.filter(ObservationRecord.observed_at >= cutoff)
+        .order_by(ObservationRecord.observed_at.asc())
+        .all()
+    )
+    return {
+        "station_code": station_code,
+        "station_name": latest.station_name,
+        "parameter_code": parameter_code,
+        "parameter_name": latest.parameter_name,
+        "unit": latest.unit,
+        "window_hours": window_hours,
+        "points": [
+            {
+                "id": r.id,
+                "observed_at": r.observed_at.isoformat(),
+                "interval_type": r.interval_type,
+                "raw_value": r.raw_value,
+                "numeric_value": r.numeric_value,
+                "qc_status": r.qc_status,
+                "qc_rule_triggered": r.qc_rule_triggered,
+                "qc_detail": r.qc_detail,
+            }
+            for r in rows
+        ],
     }
 
 
@@ -332,7 +379,7 @@ def import_sample_files(
         results.append(summary)
 
     return {
-        "message": f"{len(results)} file sampel stasiun AWS berhasil diunggah & divalidasi otomatis.",
+        "message": f"{len(results)} file sampel AWS Maritim berhasil distandarkan & divalidasi otomatis.",
         "batches": results,
     }
 
@@ -348,7 +395,7 @@ def reset_demo_data(
     db.query(EtlBatch).delete()
     db.commit()
     seed_baseline_observations(db)
-    return {"message": "Data observasi & kasus anomali telah direset ke kondisi baseline awal."}
+    return {"message": "Data observasi & kasus anomali telah direset ke baseline 24 jam awal."}
 
 
 @app.get("/api/etl/batches")
@@ -360,6 +407,7 @@ def list_etl_batches(current_user: User = Depends(get_current_user), db: Session
             "filename": b.filename,
             "uploaded_by": b.uploaded_by,
             "uploaded_at": b.uploaded_at.isoformat(),
+            "interval_type": b.interval_type,
             "total_rows": b.total_rows,
             "valid_count": b.valid_count,
             "warning_count": b.warning_count,
@@ -465,11 +513,7 @@ def get_anomaly_detail(
     if not case:
         raise HTTPException(status_code=404, detail="Kasus anomali tidak ditemukan.")
 
-    raci = (
-        db.query(RaciRegistry)
-        .filter(RaciRegistry.station_code == case.station_code)
-        .first()
-    )
+    raci = db.query(RaciRegistry).filter(RaciRegistry.station_code == case.station_code).first()
     sop = db.query(SopGuide).filter(SopGuide.sop_code == case.sop_code).first()
     obs = db.query(ObservationRecord).filter(ObservationRecord.id == case.observation_id).first()
     logs = (
@@ -479,25 +523,50 @@ def get_anomaly_detail(
         .all()
     )
 
+    # Fetch nearby +/- 12h tendency context for Pak Fajar / Datin review
+    nearby = (
+        db.query(ObservationRecord)
+        .filter(
+            ObservationRecord.station_code == case.station_code,
+            ObservationRecord.parameter_code == case.parameter_code,
+            ObservationRecord.observed_at >= case.observed_at - timedelta(hours=12),
+            ObservationRecord.observed_at <= case.observed_at + timedelta(hours=6),
+        )
+        .order_by(ObservationRecord.observed_at.asc())
+        .limit(18)
+        .all()
+    )
+
     now = utcnow()
     data = _serialize_case(case, now)
     data["unit"] = obs.unit if obs else ""
+    data["interval_type"] = obs.interval_type if obs else "1h"
     data["numeric_value"] = obs.numeric_value if obs else None
     data["raci"] = {
         "responsible": raci.responsible_role if raci else case.responsible_unit,
         "accountable": raci.accountable_role if raci else case.data_owner,
         "consulted": raci.consulted_role if raci else case.data_steward,
-        "informed": raci.informed_role if raci else "Manajemen / Deputi Observasi",
+        "informed": raci.informed_role if raci else "Forecaster & Manajemen",
         "assigned_pic_name": case.assigned_pic_name,
         "assigned_pic_username": case.assigned_pic_username,
     }
     data["sop"] = {
         "sop_code": sop.sop_code if sop else case.sop_code,
-        "title": sop.title if sop else "SOP Penanganan Anomali Observasi",
+        "title": sop.title if sop else "Rancangan SOP Penanganan Anomali Observasi",
         "steps": sop.steps_text.split("\n") if sop else ["1. Periksa kondisi sensor dan logger di lapangan."],
         "sla_target_hours": sop.sla_target_hours if sop else 12,
-        "escalation_target": sop.escalation_target if sop else "Kepala Stasiun",
+        "escalation_target": sop.escalation_target if sop else "Koordinator Datin & Kepala UPT",
     }
+    data["nearby_timeseries"] = [
+        {
+            "observed_at": n.observed_at.isoformat(),
+            "raw_value": n.raw_value,
+            "numeric_value": n.numeric_value,
+            "qc_status": n.qc_status,
+            "is_current": n.id == case.observation_id,
+        }
+        for n in nearby
+    ]
     data["history"] = [
         {
             "audit_code": l.audit_code,
@@ -530,7 +599,7 @@ def update_anomaly_status(
         raise HTTPException(status_code=400, detail=f"Status tidak valid. Pilih: {', '.join(sorted(allowed_statuses))}")
 
     if current_user.role == "teknisi" and payload.status == "Verified":
-        raise HTTPException(status_code=403, detail="Hanya Staf QC / Datin yang dapat memverifikasi penyelesaian kasus.")
+        raise HTTPException(status_code=403, detail="Hanya Bidang Datin (Staf QC) yang dapat memverifikasi penyelesaian kasus.")
 
     now = utcnow()
     prev_status = case.status
@@ -561,6 +630,45 @@ def update_anomaly_status(
     return _serialize_case(case, now)
 
 
+@app.post("/api/anomalies/{case_id}/return-to-datin")
+def return_case_to_datin(
+    case_id: int,
+    payload: ReturnToDatinRequest,
+    current_user: User = Depends(require_roles("forecaster", "staf_qc")),
+    db: Session = Depends(get_db),
+):
+    """Alur nyata dari wawancara BMKG: Forecaster mengembalikan data suspect/salah ke Bidang Datin untuk dikoreksi."""
+    case = db.query(AnomalyCase).filter(AnomalyCase.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Kasus anomali tidak ditemukan.")
+
+    now = utcnow()
+    prev_status = case.status
+    case.status = "Open"
+    case.resolved_at = None
+    case.resolution_notes = f"[Dikembalikan Forecaster] {payload.notes.strip()}"
+    case.updated_at = now
+
+    db.add(
+        AuditTrail(
+            audit_code=f"AUD-{uuid.uuid4().hex[:8].upper()}",
+            case_id=case.id,
+            case_code=case.case_code,
+            event_time=now,
+            actor_username=current_user.username,
+            actor_name=current_user.full_name,
+            actor_role=current_user.role,
+            action_type="RETURNED_TO_DATIN",
+            previous_status=prev_status,
+            new_status="Open",
+            assigned_pic="Bidang Datin (QC) & Observer",
+            notes=f"Temuan Forecaster dikembalikan ke Datin: {payload.notes.strip()}",
+        )
+    )
+    db.commit()
+    return _serialize_case(case, now)
+
+
 @app.post("/api/anomalies/{case_id}/escalate")
 def escalate_anomaly_case(
     case_id: int,
@@ -579,7 +687,7 @@ def escalate_anomaly_case(
     case.escalated_at = now
     case.updated_at = now
     if case.sla_due_at > now:
-        case.sla_due_at = now  # Mark SLA breached immediately for simulation
+        case.sla_due_at = now
 
     reason_text = payload.reason.strip() if payload.reason else "Batas waktu SLA penanganan telah terlewati."
     db.add(
